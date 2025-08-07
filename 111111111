@@ -411,7 +411,7 @@ local function MobileFly()
 end
 
 local PlayerFlySpeedSlider = PlayerTab:CreateSlider({
-   Name = "Fly Speed(Recommended to put 1 or below 5!)",
+   Name = "Fly Speed",
    Range = {0, 10},
    Increment = 0.1,
    Suffix = "Fly Speed",
