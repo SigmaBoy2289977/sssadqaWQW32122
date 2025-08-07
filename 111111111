@@ -66,6 +66,8 @@ local EspTab = Window:CreateTab("🟥Esp")
 local MiscTab = Window:CreateTab("➕Misc")
 local RolesTab = Window:CreateTab("🧏Roles")
 local SettingsTab = Window:CreateTab("⚙Settings")
+local ActivateFly,AlrActivatedFlyPC,ActivateInfiniteJump,ActiveNoclip = false,false,false,false,false,false,false,false,false,false,false,false,false
+local ParagraphInfoServer = InfoTab:CreateParagraph({Title = "Info", Content = "Loading"})
 
 -- Roles Tab
 local rolesLabel = RolesTab:CreateLabel("Sheriff: None\nMurder: None")
@@ -382,6 +384,90 @@ local function MobileFly()
 		end
 	end)
 end
+
+local PlayerActiveModifyingSpeedToggle = PlayerTab:CreateToggle({
+   Name = "Active Modifying Player Speed",
+   CurrentValue = false,
+   Flag = "ButtonSpeed", -- A flag is the identifier for the configuration file, make sure every element has a different flag if you're using configuration saving to ensure no overlaps
+   Callback = function(Value)
+  ActiveSpeedBoost = Value task.spawn(function()
+while ActiveSpeedBoost do
+Game.Players.LocalPlayer.Character.Humanoid.WalkSpeed = ValueSpeed
+task.wait(0.1)
+end
+Game.Players.LocalPlayer.Character.Humanoid.WalkSpeed = OldSpeed
+end)
+end,
+})
+local PlayerFlySpeedSlider = PlayerTab:CreateSlider({
+   Name = "Fly Speed(Recommended to put 1 or below 5!)",
+   Range = {0, 10},
+   Increment = 0.1,
+   Suffix = "Fly Speed",
+   CurrentValue = 1,
+   Flag = "Slider2", -- A flag is the identifier for the configuration file, make sure every element has a different flag if you're using configuration saving to ensure no overlaps
+   Callback = function(Value)
+CurrentValue = Value
+iyflyspeed = Value
+end,  iyflyspeed = CurrentValue,
+})
+
+local PlayerFlyToggle = PlayerTab:CreateToggle({
+   Name = "Fly",
+   CurrentValue = false,
+   Flag = "ButtonFly", -- A flag is the identifier for the configuration file, make sure every element has a different flag if you're using configuration saving to ensure no overlaps
+   Callback = function(Value)
+  ActivateFly = Value 
+task.spawn(function()
+if not FLYING and ActivateFly then
+			if UserInputService.TouchEnabled then
+				MobileFly()
+			else
+task.spawn(function()
+if not AlrActivatedFlyPC then 
+AlrActivatedFlyPC = true
+Rayfield:Notify({
+   Title = "Fly",
+   Content = "When you enable to fly you can press F to fly/unfly (it won't disable the button!)",
+   Duration = 5,
+   Image = "rewind",
+})
+end
+end)
+				NOFLY()
+				wait()
+				sFLY()
+			end
+		elseif FLYING and not ActivateFly then
+			if UserInputService.TouchEnabled then
+				UnMobileFly()
+			else
+				NOFLY()
+			end
+		end
+end)
+end,
+})
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed then return end
+	if input.KeyCode == Enum.KeyCode.F then
+		if not FLYING and ActivateFly then
+			if UserInputService.TouchEnabled then
+				MobileFly()
+			else
+				NOFLY()
+				wait()
+				sFLY()
+			end
+		elseif FLYING and ActivateFly then
+			if UserInputService.TouchEnabled then
+				UnMobileFly()
+			else
+				NOFLY()
+			end
+		end
+	end
+end)
 
 Rayfield:LoadConfiguration()
 task.spawn(function()
