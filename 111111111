@@ -1,481 +1,514 @@
-local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
-Rayfield:Notify({
-   Title = "Loading Gojo Hub",
-   Content = "Thanks For Using Gojo Hub!",
-   Duration = 3,
-   Image = 4483362458,
-})
+------------------------------------------------------------------------------------------------
 
-local Window = Rayfield:CreateWindow({
-   Name = "Gojo Hub | MM2",
-   Icon = 0, -- Icon in Topbar. Can use Lucide Icons (string) or Roblox Image (number). 0 to use no icon (default).
-   LoadingTitle = "Loading Gojo Hub",
-   LoadingSubtitle = "by Gojo",
-   ShowText = "GojoHub", -- for mobile users to unhide rayfield, change if you'd like
-   Theme = "Default", -- Check https://docs.sirius.menu/rayfield/configuration/themes
+-- State variables
+local Octree = loadstring(game:HttpGet("https://raw.githubusercontent.com/Sleitnick/rbxts-octo-tree/main/src/init.lua", true))()
 
-   ToggleUIKeybind = "K", -- The keybind to toggle the UI visibility (string like "K" or Enum.KeyCode)
+local rt = {} -- Removable table
+rt.__index = rt
+rt.octree = Octree.new()
 
-   DisableRayfieldPrompts = false,
-   DisableBuildWarnings = false, -- Prevents Rayfield from warning when the script has a version mismatch with the interface
+rt.RoundInProgress = false
 
-   ConfigurationSaving = {
-      Enabled = true,
-      FolderName = nil, -- Create a custom folder for your hub/game
-      FileName = "Gojo Hub"
-   },
+rt.Players = game.Players
+rt.player = game.Players.LocalPlayer
 
-   Discord = {
-      Enabled = false, -- Prompt the user to join your Discord server if their executor supports it
-      Invite = "noinvitelink", -- The Discord invite code, do not include discord.gg/. E.g. discord.gg/ ABCD would be ABCD
-      RememberJoins = true -- Set this to false to make them join the discord every time they load it up
-   },
+rt.coinContainer = nil
+rt.radius = 200 :: number -- Radius to search for coins
+rt.walkspeed = 30 :: number -- speed at which you will go to a coin measured in walkspeed
+rt.touchedCoins = {} -- Table to track touched coins
+rt.positionChangeConnections = setmetatable({}, { __mode = "v" }) -- Weak table for connections
+rt.Added = nil :: RBXScriptConnection
+rt.Removing = nil :: RBXScriptConnection
 
-   KeySystem = true, -- Set this to true to use our key system
-   KeySettings = {
-      Title = "Gojo Hub | Key System",
-      Subtitle = "Key Link In Discord!",
-      Note = "Key Link In DIscord!", -- Use this to tell the user how to get a key
-      FileName = "GojoHubKey", -- It is recommended to use something unique as other scripts using Rayfield may overwrite your key file
-      SaveKey = true, -- The user's key will be saved, but if you change the key, they will be unable to use your script
-      GrabKeyFromSite = true, -- If this is true, set Key below to the RAW site you would like Rayfield to get the key from
-      Key = {"https://pastebin.com/raw/wq6T3vSV"} -- List of keys that will be accepted by the system, can be RAW file links (pastebin, github etc) or simple strings ("hello","key22")
-   }
-})
+rt.UserDied = nil :: RBXScriptConnection
 
-setclipboard("https://discord.gg/7WtejdcD")
+local State = {
+    Action = "Action",
+    StandStillWait = "StandStillWait",
+    WaitingForRound = "WaitingForRound",
+    WaitingForRoundEnd = "WaitingForRoundEnd",
+    RespawnState = "RespawnState"
+}
 
-Rayfield:Notify({
-   Title = "Discord Link Copied",
-   Content = "The discord link was copied to clipboard: https://discord.gg/7WtejdcD",
-   Duration = 4,
-})
+local CurrentState = State.WaitingForRound
+local LastPosition = nil
+local RoundInProgress = function()
+    return rt.RoundInProgress
+end
+local BagIsFull = false
 
-Rayfield:Notify({
-   Title = "Thanks For Using Gojo Hub!",
-   Content = "V.1.0",
-   Duration = 1,
-   Image = "rewind",
-})
+-- Constants
+rt.RoleTracker1 = nil :: RBXScriptConnection
+rt.RoleTracker2 = nil :: RBXScriptConnection
+rt.InvalidPos = nil :: RBXScriptConnection
+local IsMurderer = false
+local Working = false
+local ROUND_TIMER = workspace:WaitForChild("RoundTimerPart").SurfaceGui.Timer
+local PLAYER_GUI = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
 
-local InfoTab = Window:CreateTab("❓Info")
-local PlayerTab = Window:CreateTab("🙍‍♂Player")
-local AutoFarmTab = Window:CreateTab("♻AutoFarm")
-local EspTab = Window:CreateTab("🟥Esp")
-local MiscTab = Window:CreateTab("➕Misc")
-local RolesTab = Window:CreateTab("🧏Roles")
-local SettingsTab = Window:CreateTab("⚙Settings")
-local ActivateFly,AlrActivatedFlyPC,ActivateInfiniteJump,ActiveNoclip = false,false,false,false,false,false,false,false,false,false,false,false,false
-local ParagraphInfoServer = InfoTab:CreateParagraph({Title = "Info", Content = "Loading"})
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
+function rt:Message(_Title, _Text, Time)
+	game:GetService("StarterGui"):SetCore("SendNotification", { Title = _Title, Text = _Text, Duration = Time })
+end
 
--- Roles Tab
-local rolesLabel = RolesTab:CreateLabel("Sheriff: None\nMurder: None")
-local sheriffName = "none"
-local murderName = "none"
+function rt:Character () : (Model)
+    return self.player.Character or self.player.CharacterAdded:Wait()
+end
 
-local function UpdateRoles()
-    sheriffName = "Waiting For Gun!"
-    murderName = "Waiting For Knife!"
+function rt:GetCharacterLoaded() : (Model)
+    repeat
+        task.wait(0.02)
+    until rt:Character() ~= nil
+end
+
+function rt:CheckIfPlayerIsInARound () : (boolean)
+    --check if player is in a round
+    --check by going to the players gui -> MainGui -> Game -> Timer.Visible
+    if not PLAYER_GUI:WaitForChild("MainGUI") then return false end
+
+    if PLAYER_GUI:WaitForChild("MainGUI").Game.Timer.Visible then
+        return true
+    end
+
+    --check by going to the players gui -> MainGui -> Game -> EarnedXP.Visible
+    if PLAYER_GUI:WaitForChild("MainGUI").Game.EarnedXP.Visible then
+        return true
+    end
+
+    return false
+end
+
+function rt:MainGUI () : (ScreenGui)
+    return self.player.PlayerGui.MainGUI or self.player.PlayerGui:WaitForChild("MainGUI")
+end
+
+function rt.Disconnect (connection:RBXScriptConnection)
+    if connection and connection.Connected then
+        connection:Disconnect()
+    end
+end
+
+function rt:Map () : (Model | nil)
+    for _, v in workspace:GetDescendants() do
+        if v.Name == "Spawns" and v.Parent.Name ~= "Lobby"  then
+            return v.Parent
+        end
+    end
+    return nil
+end
+
+function rt:CheckIfGameInProgress () : (boolean)
+    if rt:Map() then return true end
+    return false
+end
+
+function rt:GetAlivePlayers (): (table | nil)
+    --get all players that are alive
+    local aliveplrs = setmetatable({}, {__mode = "v"})
+    local OldPos = self:Character():GetPivot()
+    local pos = CFrame.new(-121.995956, 134.462997, 46.4180717)
     
-    for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
-        if player.Character then
-            if player.Character:FindFirstChild("Gun") or 
-               (player.Backpack and player.Backpack:FindFirstChild("Gun")) then
-                sheriffName = player.Name
-            elseif player.Character:FindFirstChild("Knife") or 
-                  (player.Backpack and player.Backpack:FindFirstChild("Knife")) then
-                murderName = player.Name
+    if not rt:CheckIfGameInProgress() then return nil end
+
+    local isAlive = rt:CheckIfPlayerIsInARound()
+
+    if not isAlive then self:Character():PivotTo(pos) end
+
+    for _, v in pairs(rt.Players:GetPlayers()) do
+        local distance = (self:Character().PrimaryPart.Position - v.Character.PrimaryPart.Position).Magnitude
+        if isAlive then
+            if distance <= 500 then
+                table.insert(aliveplrs, v)
+            end
+        else
+            if distance > 500 then
+                table.insert(aliveplrs, v)
+            end
+        end
+    end
+
+    if not isAlive then self:Character():PivotTo(OldPos) end
+    
+    return aliveplrs
+end
+
+function rt:CheckIfPlayerWasInARound () : (boolean)
+    if self.player:GetAttribute("Alive") then
+        return true
+    end
+
+    return false
+end
+
+function rt:IsElite() : (boolean)
+    if self.player:GetAttribute("Elite") then
+        return true
+    end
+
+    return false
+end
+
+local function AutoFarmCleanUp()
+    if next(rt.positionChangeConnections) == nil then
+        return rt:Message("Info", "Nothing to clean", 1)
+    end
+
+    -- Clean up all connections and cached data
+    for _, connection in pairs(rt.positionChangeConnections) do
+        rt.Disconnect(connection)
+    end
+    rt.Disconnect(rt.Added)
+    rt.Disconnect(rt.Removing)
+
+    rt:Message("Info", "Autofarm CleanUp Success", 2)
+    table.clear(rt.touchedCoins)
+    table.clear(rt.positionChangeConnections)
+    rt.octree:ClearAllNodes()
+end
+
+-- Function to check if a coin has been touched
+local function isCoinTouched(coin)
+    return rt.touchedCoins[coin]
+end
+
+-- Function to mark a coin as touched
+local function markCoinAsTouched(coin)
+    if not rt then return end
+    rt.touchedCoins[coin] = true
+    local node = rt.octree:FindFirstNode(coin)
+    if node then
+        rt.octree:RemoveNode(node)
+    end
+end
+
+-- Function to track touch interactions
+local function setupTouchTracking(coin)
+    
+    local touchInterest = coin:FindFirstChildWhichIsA("TouchTransmitter")
+    if touchInterest then
+        local connection
+        connection = touchInterest.AncestryChanged:Connect(function(_, parent)
+            if not rt then connection:Disconnect() return end
+            if parent == nil then
+                -- TouchInterest removed; mark the coin as touched
+                markCoinAsTouched(coin)
+                rt.Disconnect(connection)
+            end
+        end)
+        rt.positionChangeConnections[coin] = connection
+    end
+end
+
+local function setupPositionTracking(coin: MeshPart, LastPositonY: number)
+    local connection
+    connection = coin:GetPropertyChangedSignal("Position"):Connect(function()
+        -- Check if the Y position has changed
+        local currentY = coin.Position.Y
+        if LastPositonY and LastPositonY ~= currentY then
+
+            -- Remove the coin from the octree as it has been moved
+            markCoinAsTouched(coin)
+
+            rt.Disconnect(connection)
+            coin:Destroy()
+            return
+        end
+    end)
+    rt.positionChangeConnections[coin] = connection
+end
+
+local function moveToPositionSlowly(targetPosition: Vector3, duration: number)
+    local startPosition = rt:Character().PrimaryPart.Position
+    local startTime = tick()
+
+    local nearestNode = rt.octree:GetNearest(rt:Character().PrimaryPart.Position, rt.radius, 1)[1]
+    if nearestNode then
+        local closestCoin = nearestNode.Object
+        if not isCoinTouched(closestCoin) then
+            local targetPosition2 = closestCoin.Position
+            if targetPosition ~= targetPosition2 then 
+                targetPosition = targetPosition2
             end
         end
     end
     
-    local sheriffText = "<font color='#00A2FF'>Sheriff: "..sheriffName.."</font>"
-    local murderText = "<font color='#FF0000'>Murder: "..murderName.."</font>"
-    rolesLabel:Set(sheriffText.."\n"..murderText)
+    while true do
+        local elapsedTime = tick() - startTime
+        local alpha = math.min(elapsedTime / duration, 1)
+
+        if rt:Character() == nil then break end
+
+        rt:Character():PivotTo(CFrame.new(startPosition:Lerp(targetPosition, alpha)))
+
+        if alpha >= 1 then
+            task.wait(0.2)
+            break
+        end
+
+        task.wait() -- Small delay to make the movement smoother
+    end
+end
+-- Function to populate the Octree with coins
+local function populateOctree()
+    rt.octree:ClearAllNodes() -- Clear previous nodes
+
+    for _, descendant in pairs(rt.coinContainer:GetDescendants()) do
+        if descendant:IsA("TouchTransmitter") then --and descendant.Material == rt.Material then
+            local parentCoin = descendant.Parent
+            if not isCoinTouched(parentCoin) then
+                rt.octree:CreateNode(parentCoin.Position, parentCoin)
+                setupTouchTracking(parentCoin)
+            end
+            setupPositionTracking(parentCoin, parentCoin.Position.Y)
+        end
+    end
+
+    rt.Added = rt.coinContainer.DescendantAdded:Connect(function(descendant)
+        if descendant:IsA("TouchTransmitter") then --and descendant.Material == rt.Material then
+            local parentCoin = descendant.Parent
+            if not isCoinTouched(parentCoin) then
+                rt.octree:CreateNode(parentCoin.Position, parentCoin)
+                setupTouchTracking(parentCoin)
+                setupPositionTracking(parentCoin, parentCoin.Position.Y)
+            end
+        end
+    end)
+
+    rt.Removing = rt.coinContainer.DescendantRemoving:Connect(function(descendant)
+        if descendant:IsA("TouchTransmitter") and descendant.Parent.Name == "Coin_Server" then
+            local parentCoin = descendant.Parent
+            if isCoinTouched(parentCoin) then
+                markCoinAsTouched(parentCoin)
+            end
+        end
+    end)
 end
 
-game:GetService("RunService").Heartbeat:Connect(UpdateRoles)
+local function ChangeState(State)
+    CurrentState = State
+end
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
 
-RolesTab:CreateButton({
-    Name = "Copy Roles",
-    Callback = function()
-        local namesToCopy = "Sheriff: "..sheriffName.."\nMurder: "..murderName
-        setclipboard(namesToCopy)
-        
-        Rayfield:Notify({
-   Title = "RolesCopied",
-   Content = "Roles Copied To Clipboard",
-   Duration = 2,
-   Image = nil,
-})
-    end,
-})
+-- Helper Functions
 
-RolesTab:CreateButton({
-    Name = "Send roles to chat",
-    Callback = function()
-        local message = "Sheriff: "..sheriffName.."\nMurder: "..murderName
-        
-        if game:GetService("TextChatService") then
-            local channel = game:GetService("TextChatService").TextChannels.RBXGeneral
-            if channel then
-                channel:DisplaySystemMessage(message)
-            else
-                warn("RBXGeneral channel not found!")
+local function CheckMurderer()
+    return IsMurderer
+end
+
+local function IsBagFull()
+    local playerGui = PLAYER_GUI:WaitForChild("MainGUI")
+    local coinText = playerGui.Game.CoinBags.Container.SnowToken.CurrencyFrame.Icon.Coins.Text
+    return tonumber(coinText) >= (rt:IsElite() and 50 or 40)
+end
+
+local function RespawnAndTeleportBack()
+    LastPosition = LastPosition ~= nil and LastPosition or rt:Character():GetPivot()
+    rt:Character():FindFirstChildWhichIsA("Humanoid"):ChangeState(Enum.HumanoidStateType.Dead)
+    rt:GetCharacterLoaded()
+    task.wait(1)
+    
+    if rt:Character() then
+        if not RoundInProgress() then rt:GetCharacterLoaded() return ChangeState(State.WaitingForRound) end
+        rt:GetCharacterLoaded()
+        rt:Character():PivotTo(LastPosition)
+    end
+end
+
+local function CollectCoins()
+    Working = true
+    rt.coinContainer = rt:Map():FindFirstChild("CoinContainer")
+    populateOctree()
+    while CurrentState == State.Action do
+        if IsBagFull() then
+            rt:Message("Alert", "Bag is full!", 2)
+            BagIsFull = true
+            break
+        end
+
+        if rt:Character() == nil then
+            break
+        end
+
+        -- Find nearest coin
+        local nearestNode = rt.octree:GetNearest(rt:Character().PrimaryPart.Position, rt.radius, 1)[1]
+        if nearestNode then
+            local closestCoin = nearestNode.Object
+            if not isCoinTouched(closestCoin) then
+                local targetPosition = closestCoin.Position
+                local duration = (rt:Character().PrimaryPart.Position - targetPosition).Magnitude / rt.walkspeed
+                moveToPositionSlowly(targetPosition, duration)
+                markCoinAsTouched(closestCoin)
+                task.wait(0.2)
             end
         else
-            game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents.SayMessageRequest:FireServer(message, "All")
+            task.wait(1)
         end
-        
-        Rayfield:Notify({
-            Title = "Roles Sented",
-            Content = "Roles Sented To Chat",
-            Duration = 2,
-            Image = nil,
-        })
-    end,
-})
-
-local DisocrdLink = InfoTab:CreateButton({
-   Name = "Discord Link",
-   Callback = function()
-        copyToClipboard("https://discord.gg/7WtejdcD")
-
-            Rayfield:Notify({
-   Title = "Discord Link Copied",
-   Content = "The discord link was copied to clipboard: https://discord.gg/7WtejdcD",
-   Duration = 1.5,
-})
-end,
-})
-
-local ButtonUnloadCheat = SettingsTab:CreateButton({
-   Name = "Unload Cheat",
-   Callback = function()
-  Rayfield:Destroy()
-end,
-})
-
-local Themes = {
-   ["Default"] = "Default",
-   ["Amber Glow"] = "AmberGlow",
-   ["Amethyst"] = "Amethyst",
-   ["Bloom"] = "Bloom",
-   ["Dark Blue"] = "DarkBlue",
-   ["Green"] = "Green",
-   ["Light"] = "Light",
-   ["Ocean"] = "Ocean",
-   ["Serenity"] = "Serenity"
-}
-
-local Dropdown = SettingsTab:CreateDropdown({
-   Name = "Change Theme",
-   Options = {"Default", "Amber Glow", "Amethyst", "Bloom", "Dark Blue", "Green", "Light", "Ocean", "Serenity"},
-   CurrentOption = selectedTheme,  -- pour afficher ce qui est réellement chargé
-   Flag = "ThemeSelection",
-   Callback = function(Selected)
-      local ident = Themes[Selected[1]]
-      Window.ModifyTheme(ident)  -- <— Applique le thème en direct
-   end, 
-})
-
-local function getServerInfo()
-	local Players = game:GetService("Players")
-	local playerCount = #Players:GetPlayers()
-local maxPlayers = game:GetService("Players").MaxPlayers
-local isStudio = game:GetService("RunService"):IsStudio()
-
-	return {
-		PlaceId = game.PlaceId,
-		JobId = game.JobId,
-		IsStudio = isStudio,
-		CurrentPlayers = playerCount,
-MaxPlayers =maxPlayers
-	}
+    end
+    AutoFarmCleanUp()
 end
-local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
 
-Rayfield:LoadConfiguration()
-task.spawn(function()
+local function RespawnState()
+    rt:Message("Info", "Respawning...", 2)
+    rt:GetCharacterLoaded()
+    task.wait(1)
+    if LastPosition == nil then LastPosition = rt:GetAlivePlayers()[1] end
+    if rt:Character() then
+        rt:GetCharacterLoaded()
+        rt:Character():PivotTo(LastPosition)
+    end
+    rt:Message("Info", "Respawned!", 2)
+
+    if not RoundInProgress() then
+        rt:Message("Info", "Round ended during respawn!", 2)
+        ChangeState(State.WaitingForRound)
+        return
+    end
+
+    ChangeState(State.Action)
+end
+
+-- Waiting State Logic
+local function WaitingForRound()
+    rt:Message("Info", "Waiting for round to start...", 2)
+    Working = false
+    --rt:Character():FindFirstChildWhichIsA("Humanoid"):ChangeState(Enum.HumanoidStateType.Seated)
+   -- Monitor round start
+    repeat
+        task.wait(0.5)
+    until RoundInProgress() and rt:CheckIfPlayerWasInARound()
+
+    rt:Message("Alert", "Round started!", 2)
+    ChangeState(State.Action)
+end
+
+local function waitForRoundEnd()
+    rt:Message("Info", "Waiting for round to end...", 2)
+    Working = false
+    --rt:Character():FindFirstChildWhichIsA("Humanoid"):ChangeState(Enum.HumanoidStateType.Seated)
+    -- Monitor round end
+    repeat
+        task.wait(1)
+    until not RoundInProgress()
+
+    rt:Message("Alert", "Round ended!", 2)
+    ChangeState(State.WaitingForRound)
+end
+
+local function StandStillWait()
+    rt:Message("Info", "Waiting for murderer to respawn", 2)
+    ChangeState("Nothing")
+    rt:GetCharacterLoaded()
+    task.wait(2)
+    ChangeState(State.WaitingForRound)
+end
+
+-- Action State Logic
+local function ActionState()
+    LastPosition = nil
+    if CheckMurderer() then
+        rt:Message("Info", "You are the Murderer! Collecting coins...", 2)
+        CollectCoins()
+    else
+        rt:Message("Info", "Logging position and respawning...", 2)
+        --if #game.Players:GetChildren() > 2 then RespawnAndTeleportBack(); CollectCoins() else CollectCoins() end
+        CollectCoins()
+    end
+
+    -- After collecting coins or if the round ends, return to waiting state
+    if BagIsFull or not RoundInProgress() then
+        if CheckMurderer() then
+            rt:Message("Info", "Returning to Waiting State...", 2)
+            BagIsFull, Working, rt.RoundInProgress = false, false, false
+            rt:Character():FindFirstChildWhichIsA("Humanoid"):ChangeState(Enum.HumanoidStateType.Dead)
+        else
+            rt:Message("Info", "Returning to Waiting State...", 2)
+            BagIsFull, Working = false, false
+            rt:Character():FindFirstChildWhichIsA("Humanoid"):ChangeState(Enum.HumanoidStateType.Dead)
+            ChangeState(State.WaitingForRoundEnd)
+        end
+    end
+    
+end
+
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
+rt.RoleTracker1 = rt.player.DescendantAdded:Connect(function(descendant)
+    if descendant:IsA("Tool") then
+        if descendant.Name == "Knife" then
+            IsMurderer = true
+        end
+    end
+end)
+
+rt.InvalidPos = workspace.DescendantAdded:Connect(function(descendant)
+    if descendant:IsA("Model") then
+        if string.match(descendant.Name, "Glitch") and descendant.Parent.Name ~= "Lobby" then
+            descendant:Destroy()
+        end
+
+        if string.match(descendant.Name, "Invis") and descendant.Parent.Name ~= "Lobby" then
+            descendant:Destroy()
+        end
+    end
+end)
+
+ -- Monitor round start
+local LastText
+ROUND_TIMER:GetPropertyChangedSignal("Text"):Connect(function()
+    rt.RoundInProgress = true
+end)
+
+PLAYER_GUI.ChildAdded:Connect(function(child)
+    if child:IsA("Sound") then
+        rt.RoundInProgress = false
+        Working = false
+        ChangeState(State.WaitingForRound)
+    end
+end)
+
+rt.UserDied = rt.player.CharacterRemoving:Connect(function(character)
+    AutoFarmCleanUp()
+    LastText = ROUND_TIMER.Text
+    if CheckMurderer() then IsMurderer = false; LastPosition = nil; Working = false; rt.RoundInProgress = false return ChangeState(State.StandStillWait) end
+    
+    if not RoundInProgress() then IsMurderer = false; LastPosition = nil; Working = false; return ChangeState(State.WaitingForRound) end
+
+    task.wait(2)
+    if LastText == ROUND_TIMER.Text then LastPosition = nil; IsMurderer = false; rt.RoundInProgress = false; Working = false return ChangeState(State.WaitingForRound) end
+
+    if Working then
+        Working = false
+        IsMurderer = false
+        LastPosition = nil
+        ChangeState(State.RespawnState)
+    end
+end)
+
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
+
+IsMurderer = rt.player.Backpack:FindFirstChild("Knife") and true or false   
+
+
+-- Main Loop
 while true do
-	task.wait(1) 
-task.spawn(function()
-	local updatedInfo = getServerInfo()
-	local updatedContent = string.format(
-		"📌 PlaceId: %s\n🔑 JobId: %s\n🧪 IsStudio: %s\n👥 Players: %d/%d",
-		updatedInfo.PlaceId,
-		updatedInfo.JobId,
-		
-		tostring(updatedInfo.IsStudio),
-		updatedInfo.CurrentPlayers,
-updatedInfo.MaxPlayers
-	)
-
-	ParagraphInfoServer:Set({
-		Title = "Info",
-		Content = updatedContent
-	})
-end)
+    if CurrentState == State.WaitingForRound then
+        WaitingForRound()
+    elseif CurrentState == State.Action then
+        ActionState()
+    elseif CurrentState == State.WaitingForRoundEnd then
+        waitForRoundEnd()
+    elseif CurrentState == State.RespawnState then
+        RespawnState()
+    elseif CurrentState == State.StandStillWait then
+        StandStillWait()
+    end
+    task.wait()
 end
 
-end)
 
-local IYMouse = Players.LocalPlayer:GetMouse()
-local FLYING = false
-local QEfly = true
-local iyflyspeed = 1
-local vehicleflyspeed = 1
-
-local function sFLY(vfly)
-	repeat wait() until Players.LocalPlayer and Players.LocalPlayer.Character and Players.LocalPlayer.Character:WaitForChild("HumanoidRootPart") and Players.LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-	repeat wait() until IYMouse
-	if flyKeyDown or flyKeyUp then flyKeyDown:Disconnect() flyKeyUp:Disconnect() end
-
-	local T = Players.LocalPlayer.Character:WaitForChild("HumanoidRootPart")
-	local CONTROL = {F = 0, B = 0, L = 0, R = 0, Q = 0, E = 0}
-	local lCONTROL = {F = 0, B = 0, L = 0, R = 0, Q = 0, E = 0}
-	local SPEED = 0
-
-	local function FLY()
-		FLYING = true
-		local BG = Instance.new('BodyGyro')
-		local BV = Instance.new('BodyVelocity')
-		BG.P = 9e4
-		BG.Parent = T
-		BV.Parent = T
-		BG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-		BG.CFrame = T.CFrame
-		BV.Velocity = Vector3.new(0, 0, 0)
-		BV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-		task.spawn(function()
-			repeat wait()
-				if not vfly and Players.LocalPlayer.Character:FindFirstChildOfClass('Humanoid') then
-					Players.LocalPlayer.Character:FindFirstChildOfClass('Humanoid').PlatformStand = true
-				end
-				if CONTROL.L + CONTROL.R ~= 0 or CONTROL.F + CONTROL.B ~= 0 or CONTROL.Q + CONTROL.E ~= 0 then
-					SPEED = 50
-				elseif not (CONTROL.L + CONTROL.R ~= 0 or CONTROL.F + CONTROL.B ~= 0 or CONTROL.Q + CONTROL.E ~= 0) and SPEED ~= 0 then
-					SPEED = 0
-				end
-				if (CONTROL.L + CONTROL.R) ~= 0 or (CONTROL.F + CONTROL.B) ~= 0 or (CONTROL.Q + CONTROL.E) ~= 0 then
-					BV.Velocity = ((workspace.CurrentCamera.CoordinateFrame.lookVector * (CONTROL.F + CONTROL.B)) + ((workspace.CurrentCamera.CoordinateFrame * CFrame.new(CONTROL.L + CONTROL.R, (CONTROL.F + CONTROL.B + CONTROL.Q + CONTROL.E) * 0.2, 0).p) - workspace.CurrentCamera.CoordinateFrame.p)) * SPEED
-					lCONTROL = {F = CONTROL.F, B = CONTROL.B, L = CONTROL.L, R = CONTROL.R}
-				elseif (CONTROL.L + CONTROL.R) == 0 and (CONTROL.F + CONTROL.B) == 0 and (CONTROL.Q + CONTROL.E) == 0 and SPEED ~= 0 then
-					BV.Velocity = ((workspace.CurrentCamera.CoordinateFrame.lookVector * (lCONTROL.F + lCONTROL.B)) + ((workspace.CurrentCamera.CoordinateFrame * CFrame.new(lCONTROL.L + lCONTROL.R, (lCONTROL.F + lCONTROL.B + CONTROL.Q + CONTROL.E) * 0.2, 0).p) - workspace.CurrentCamera.CoordinateFrame.p)) * SPEED
-				else
-					BV.Velocity = Vector3.new(0, 0, 0)
-				end
-				BG.CFrame = workspace.CurrentCamera.CoordinateFrame
-			until not FLYING
-			CONTROL = {F = 0, B = 0, L = 0, R = 0, Q = 0, E = 0}
-			lCONTROL = {F = 0, B = 0, L = 0, R = 0, Q = 0, E = 0}
-			SPEED = 0
-			BG:Destroy()
-			BV:Destroy()
-			if Players.LocalPlayer.Character:FindFirstChildOfClass('Humanoid') then
-				Players.LocalPlayer.Character:FindFirstChildOfClass('Humanoid').PlatformStand = false
-			end
-		end)
-	end
-	flyKeyDown = IYMouse.KeyDown:Connect(function(KEY)
-		if KEY:lower() == 'w' then
-			CONTROL.F = (vfly and vehicleflyspeed or iyflyspeed)
-		elseif KEY:lower() == 's' then
-			CONTROL.B = - (vfly and vehicleflyspeed or iyflyspeed)
-		elseif KEY:lower() == 'a' then
-			CONTROL.L = - (vfly and vehicleflyspeed or iyflyspeed)
-		elseif KEY:lower() == 'd' then 
-			CONTROL.R = (vfly and vehicleflyspeed or iyflyspeed)
-		elseif QEfly and KEY:lower() == 'e' then
-			CONTROL.Q = (vfly and vehicleflyspeed or iyflyspeed)*2
-		elseif QEfly and KEY:lower() == 'q' then
-			CONTROL.E = -(vfly and vehicleflyspeed or iyflyspeed)*2
-		end
-		pcall(function() workspace.CurrentCamera.CameraType = Enum.CameraType.Track end)
-	end)
-	flyKeyUp = IYMouse.KeyUp:Connect(function(KEY)
-		if KEY:lower() == 'w' then
-			CONTROL.F = 0
-		elseif KEY:lower() == 's' then
-			CONTROL.B = 0
-		elseif KEY:lower() == 'a' then
-			CONTROL.L = 0
-		elseif KEY:lower() == 'd' then
-			CONTROL.R = 0
-		elseif KEY:lower() == 'e' then
-			CONTROL.Q = 0
-		elseif KEY:lower() == 'q' then
-			CONTROL.E = 0
-		end
-	end)
-	FLY()
-end
-
-local function NOFLY()
-	FLYING = false
-	if flyKeyDown or flyKeyUp then flyKeyDown:Disconnect() flyKeyUp:Disconnect() end
-	if Players.LocalPlayer.Character:FindFirstChildOfClass('Humanoid') then
-		Players.LocalPlayer.Character:FindFirstChildOfClass('Humanoid').PlatformStand = false
-	end
-	pcall(function() workspace.CurrentCamera.CameraType = Enum.CameraType.Custom end)
-end
-
-local velocityHandlerName = "BodyVelocity"
-local gyroHandlerName = "BodyGyro"
-local mfly1
-local mfly2
-
-local function UnMobileFly()
-	pcall(function()
-		FLYING = false
-		local root = Players.LocalPlayer.Character:WaitForChild("HumanoidRootPart")
-		root:FindFirstChild(velocityHandlerName):Destroy()
-		root:FindFirstChild(gyroHandlerName):Destroy()
-		Players.LocalPlayer.Character:FindFirstChildWhichIsA("Humanoid").PlatformStand = false
-		mfly1:Disconnect()
-		mfly2:Disconnect()
-	end)
-end
-
-local function MobileFly()
-	UnMobileFly()
-	FLYING = true
-
-	local root = Players.LocalPlayer.Character:WaitForChild("HumanoidRootPart")
-	local camera = workspace.CurrentCamera
-	local v3none = Vector3.new()
-	local v3zero = Vector3.new(0, 0, 0)
-	local v3inf = Vector3.new(9e9, 9e9, 9e9)
-
-	local controlModule = require(Players.LocalPlayer.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
-	local bv = Instance.new("BodyVelocity")
-	bv.Name = velocityHandlerName
-	bv.Parent = root
-	bv.MaxForce = v3zero
-	bv.Velocity = v3zero
-
-	local bg = Instance.new("BodyGyro")
-	bg.Name = gyroHandlerName
-	bg.Parent = root
-	bg.MaxTorque = v3inf
-	bg.P = 1000
-	bg.D = 50
-
-	mfly1 = Players.LocalPlayer.CharacterAdded:Connect(function()
-		local bv = Instance.new("BodyVelocity")
-		bv.Name = velocityHandlerName
-		bv.Parent = root
-		bv.MaxForce = v3zero
-		bv.Velocity = v3zero
-
-		local bg = Instance.new("BodyGyro")
-		bg.Name = gyroHandlerName
-		bg.Parent = root
-		bg.MaxTorque = v3inf
-		bg.P = 1000
-		bg.D = 50
-	end)
-
-	mfly2 = RunService.RenderStepped:Connect(function()
-		root = Players.LocalPlayer.Character:WaitForChild("HumanoidRootPart")
-		camera = workspace.CurrentCamera
-		if Players.LocalPlayer.Character:FindFirstChildWhichIsA("Humanoid") and root and root:FindFirstChild(velocityHandlerName) and root:FindFirstChild(gyroHandlerName) then
-			local humanoid = Players.LocalPlayer.Character:FindFirstChildWhichIsA("Humanoid")
-			local VelocityHandler = root:FindFirstChild(velocityHandlerName)
-			local GyroHandler = root:FindFirstChild(gyroHandlerName)
-
-			VelocityHandler.MaxForce = v3inf
-			GyroHandler.MaxTorque = v3inf
-			humanoid.PlatformStand = true
-			GyroHandler.CFrame = camera.CoordinateFrame
-			VelocityHandler.Velocity = v3none
-
-			local direction = controlModule:GetMoveVector()
-			if direction.X > 0 then
-				VelocityHandler.Velocity = VelocityHandler.Velocity + camera.CFrame.RightVector * (direction.X * ((iyflyspeed) * 50))
-			end
-			if direction.X < 0 then
-				VelocityHandler.Velocity = VelocityHandler.Velocity + camera.CFrame.RightVector * (direction.X * ((iyflyspeed) * 50))
-			end
-			if direction.Z > 0 then
-				VelocityHandler.Velocity = VelocityHandler.Velocity - camera.CFrame.LookVector * (direction.Z * ((iyflyspeed) * 50))
-			end
-			if direction.Z < 0 then
-				VelocityHandler.Velocity = VelocityHandler.Velocity - camera.CFrame.LookVector * (direction.Z * ((iyflyspeed) * 50))
-			end
-		end
-	end)
-end
-
-local PlayerFlySpeedSlider = PlayerTab:CreateSlider({
-   Name = "Fly Speed",
-   Range = {0, 10},
-   Increment = 0.1,
-   Suffix = "Fly Speed",
-   CurrentValue = 1,
-   Flag = "Slider2", -- A flag is the identifier for the configuration file, make sure every element has a different flag if you're using configuration saving to ensure no overlaps
-   Callback = function(Value)
-CurrentValue = Value
-iyflyspeed = Value
-end,  iyflyspeed = CurrentValue,
-})
-
-local PlayerFlyToggle = PlayerTab:CreateToggle({
-   Name = "Fly",
-   CurrentValue = false,
-   Flag = "ButtonFly", -- A flag is the identifier for the configuration file, make sure every element has a different flag if you're using configuration saving to ensure no overlaps
-   Callback = function(Value)
-  ActivateFly = Value 
-task.spawn(function()
-if not FLYING and ActivateFly then
-			if UserInputService.TouchEnabled then
-				MobileFly()
-			else
-task.spawn(function()
-if not AlrActivatedFlyPC then 
-AlrActivatedFlyPC = true
-Rayfield:Notify({
-   Title = "Fly",
-   Content = "When you enable to fly you can press F to fly/unfly (it won't disable the button!)",
-   Duration = 5,
-   Image = "rewind",
-})
-end
-end)
-				NOFLY()
-				wait()
-				sFLY()
-			end
-		elseif FLYING and not ActivateFly then
-			if UserInputService.TouchEnabled then
-				UnMobileFly()
-			else
-				NOFLY()
-			end
-		end
-end)
-end,
-})
-UserInputService.InputBegan:Connect(function(input, processed)
-	if processed then return end
-	if input.KeyCode == Enum.KeyCode.F then
-		if not FLYING and ActivateFly then
-			if UserInputService.TouchEnabled then
-				MobileFly()
-			else
-				NOFLY()
-				wait()
-				sFLY()
-			end
-		elseif FLYING and ActivateFly then
-			if UserInputService.TouchEnabled then
-				UnMobileFly()
-			else
-				NOFLY()
-			end
-		end
-	end
-end)
+---------------------------------------------------------------------------------------------------------
+--if the sound doesnt play when the murderer dies run getgenv().RoundInProgress = false
